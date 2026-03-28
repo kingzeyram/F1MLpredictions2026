@@ -1,0 +1,7 @@
+requirements
+-fastf1
+-pandas
+-numpy
+-scikit-learn
+-xgboost
+-requests
