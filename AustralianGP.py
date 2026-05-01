@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error
-
+ 
 # Enable FastF1 caching
 fastf1.Cache.enable_cache("f1_cache")
 
