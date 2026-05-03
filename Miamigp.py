@@ -1,6 +1,14 @@
+"""
+2026 Miami Grand Prix — Race Prediction
+Model: XGBoost (XGBRegressor)
+
+Install dependencies:
+    pip install xgboost pandas numpy scikit-learn
+"""
+
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import GradientBoostingRegressor
+from xgboost import XGBRegressor
 from sklearn.model_selection import LeaveOneOut
 from sklearn.metrics import mean_absolute_error
 
@@ -10,8 +18,8 @@ from sklearn.metrics import mean_absolute_error
 # Weather: Dry Fri/Sat, ~40–88% rain probability Sunday (thunderstorm risk)
 
 weather_data = {
-    "RainProbability": 0.55,   # Blended forecast: AccuWeather 88%, F1 official 40%
-    "Temperature": 28.0,       # Sunday race-day high °C
+    "RainProbability": 0.55,   # Blended: AccuWeather 88% / F1 official 40%
+    "Temperature":     28.0,   # Sunday race-day high °C
 }
 
 # ─── CONSTRUCTOR STANDINGS (after Round 3, Japan) ─────────────────────────────
@@ -24,61 +32,45 @@ constructor_pts = {
     "Alpine":         8,
     "Audi":           4,
     "Williams":       2,
-    "Haas":           0,   # Bearman crash Japan, Ocon no points yet
+    "Haas":           0,
     "Aston Martin":   0,
 }
 
 # ─── DRIVER DATA ──────────────────────────────────────────────────────────────
-# Sources:
-#  - JapanGrid          : 2026 Japanese GP qualifying grid (actual)
-#  - JapanGapFromPole_S : Japan Q3 gap to Antonelli's pole (1:28.778)
-#  - MiamiGrid          : Estimated grid (Sprint Qualifying not yet run;
-#                         based on Japan pace + ERS reg changes + analyst intel)
-#  - RacePace_CleanAir  : Estimated per-lap race pace at Miami (5.412 km circuit)
-#  - TyreDeg            : Miami tyre deg index (low-med deg circuit, resurfaced 2023)
-#  - Miami_Confidence   : Driver Miami circuit confidence/historical form /10
-#  - ActualRaceTime     : Japan actual race time used as training target (seconds/lap avg)
-#
-# Key context for Miami vs Japan:
-#  - FIA ERS deployment & qualifying energy limit changes → could close Mercedes gap
-#  - All teams bringing upgrades after 5-week break
-#  - McLaren & Ferrari expected to have narrowed gap; Red Bull still struggling
-#  - Rain risk could scramble strategy significantly
-
 miami_data = [
     # ── MERCEDES ──────────────────────────────────────────────────────────────
     {
         "Driver":              "Kimi Antonelli",
         "Team":                "Mercedes",
-        "UltimateLap_S":       88.778,          # Japan pole time
+        "UltimateLap_S":       88.778,
         "JapanGapFromPole_S":  0.000,
         "JapanGrid":           1,
-        "MiamiGrid":           1,               # Championship leader, sprint pole fav
-        "RacePace_CleanAir":   93.8,            # Miami slightly slower than Suzuka
-        "TyreDeg":             2.8,             # Miami low-deg circuit
-        "Miami_Confidence":    8.5,             # Strong recent form; limited Miami history
-        "ActualRaceTime":      97.21,           # Japan race lap avg (training target)
+        "MiamiGrid":           1,
+        "RacePace_CleanAir":   93.8,
+        "TyreDeg":             2.8,
+        "Miami_Confidence":    8.5,
+        "ActualRaceTime":      97.21,
     },
     {
         "Driver":              "George Russell",
         "Team":                "Mercedes",
-        "UltimateLap_S":       89.076,          # Japan P2
+        "UltimateLap_S":       89.076,
         "JapanGapFromPole_S":  0.298,
         "JapanGrid":           2,
-        "MiamiGrid":           2,               # Podium finisher in Miami 2025
+        "MiamiGrid":           2,
         "RacePace_CleanAir":   93.9,
         "TyreDeg":             2.9,
-        "Miami_Confidence":    9.2,             # Strong Miami history
+        "Miami_Confidence":    9.2,
         "ActualRaceTime":      97.43,
     },
     # ── McLAREN ───────────────────────────────────────────────────────────────
     {
         "Driver":              "Oscar Piastri",
         "Team":                "McLaren",
-        "UltimateLap_S":       89.132,          # Japan P3
+        "UltimateLap_S":       89.132,
         "JapanGapFromPole_S":  0.354,
         "JapanGrid":           3,
-        "MiamiGrid":           3,               # Strong recent form, Japan P2
+        "MiamiGrid":           3,
         "RacePace_CleanAir":   94.2,
         "TyreDeg":             3.1,
         "Miami_Confidence":    8.8,
@@ -87,48 +79,48 @@ miami_data = [
     {
         "Driver":              "Lando Norris",
         "Team":                "McLaren",
-        "UltimateLap_S":       89.409,          # Japan P5
+        "UltimateLap_S":       89.409,
         "JapanGapFromPole_S":  0.631,
         "JapanGrid":           5,
-        "MiamiGrid":           4,               # 2024 Miami winner; high confidence
+        "MiamiGrid":           4,
         "RacePace_CleanAir":   94.4,
         "TyreDeg":             3.2,
-        "Miami_Confidence":    9.5,             # Won maiden GP here 2024
+        "Miami_Confidence":    9.5,
         "ActualRaceTime":      98.05,
     },
     # ── FERRARI ───────────────────────────────────────────────────────────────
     {
         "Driver":              "Charles Leclerc",
         "Team":                "Ferrari",
-        "UltimateLap_S":       89.405,          # Japan P4
+        "UltimateLap_S":       89.405,
         "JapanGapFromPole_S":  0.627,
         "JapanGrid":           4,
         "MiamiGrid":           5,
         "RacePace_CleanAir":   94.3,
-        "TyreDeg":             2.7,             # Ferrari strong tyre management
+        "TyreDeg":             2.7,
         "Miami_Confidence":    8.7,
         "ActualRaceTime":      97.75,
     },
     {
         "Driver":              "Lewis Hamilton",
         "Team":                "Ferrari",
-        "UltimateLap_S":       89.567,          # Japan P6
+        "UltimateLap_S":       89.567,
         "JapanGapFromPole_S":  0.789,
         "JapanGrid":           6,
         "MiamiGrid":           6,
         "RacePace_CleanAir":   94.5,
         "TyreDeg":             2.8,
-        "Miami_Confidence":    8.0,             # Seeking return to form in US
+        "Miami_Confidence":    8.0,
         "ActualRaceTime":      97.90,
     },
     # ── ALPINE ────────────────────────────────────────────────────────────────
     {
         "Driver":              "Pierre Gasly",
         "Team":                "Alpine",
-        "UltimateLap_S":       89.691,          # Japan P7
+        "UltimateLap_S":       89.691,
         "JapanGapFromPole_S":  0.913,
         "JapanGrid":           7,
-        "MiamiGrid":           7,               # Strong recent form for Alpine
+        "MiamiGrid":           7,
         "RacePace_CleanAir":   95.8,
         "TyreDeg":             3.5,
         "Miami_Confidence":    7.5,
@@ -138,20 +130,20 @@ miami_data = [
     {
         "Driver":              "Max Verstappen",
         "Team":                "Red Bull",
-        "UltimateLap_S":       89.992,          # Japan P11 (Q2 exit)
+        "UltimateLap_S":       89.992,
         "JapanGapFromPole_S":  1.214,
         "JapanGrid":           11,
-        "MiamiGrid":           9,               # Better Miami circuit suit expected
+        "MiamiGrid":           9,
         "RacePace_CleanAir":   95.5,
         "TyreDeg":             4.2,
-        "Miami_Confidence":    7.8,             # Struggling with 2026 RB car
+        "Miami_Confidence":    7.8,
         "ActualRaceTime":      98.95,
     },
     # ── RACING BULLS ──────────────────────────────────────────────────────────
     {
         "Driver":              "Isack Hadjar",
         "Team":                "Racing Bulls",
-        "UltimateLap_S":       89.978,          # Japan P8
+        "UltimateLap_S":       89.978,
         "JapanGapFromPole_S":  1.200,
         "JapanGrid":           8,
         "MiamiGrid":           8,
@@ -164,7 +156,7 @@ miami_data = [
     {
         "Driver":              "Gabriel Bortoleto",
         "Team":                "Audi",
-        "UltimateLap_S":       90.274,          # Japan P9
+        "UltimateLap_S":       90.274,
         "JapanGapFromPole_S":  1.496,
         "JapanGrid":           9,
         "MiamiGrid":           10,
@@ -197,67 +189,99 @@ features = [
 X = df[features]
 y = df["ActualRaceTime"]
 
+# ─── XGBOOST HYPERPARAMETERS ──────────────────────────────────────────────────
+xgb_params = dict(
+    n_estimators     = 200,
+    learning_rate    = 0.08,
+    max_depth        = 4,
+    subsample        = 0.8,     # row sampling per tree
+    colsample_bytree = 0.8,     # feature sampling per tree
+    reg_lambda       = 1.0,     # L2 regularisation (λ)
+    reg_alpha        = 0.0,     # L1 regularisation (α)
+    min_child_weight = 1,
+    objective        = "reg:squarederror",
+    eval_metric      = "mae",
+    random_state     = 39,
+    verbosity        = 0,
+)
+
 # ─── LEAVE-ONE-OUT CROSS VALIDATION ───────────────────────────────────────────
 loo    = LeaveOneOut()
 errors = []
 
-for train_index, test_index in loo.split(X):
-    X_train, X_test = X.iloc[train_index], X.iloc[test_index]
-    y_train, y_test = y.iloc[train_index], y.iloc[test_index]
-    model = GradientBoostingRegressor(
-        n_estimators=100, learning_rate=0.08, max_depth=4, random_state=39
-    )
-    model.fit(X_train, y_train)
-    errors.append(mean_absolute_error(y_test, model.predict(X_test)))
+for train_idx, test_idx in loo.split(X):
+    X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+    y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+    mdl = XGBRegressor(**xgb_params)
+    mdl.fit(X_train, y_train)
+    errors.append(mean_absolute_error(y_test, mdl.predict(X_test)))
 
-# ─── FINAL MODEL FIT & PREDICTION ─────────────────────────────────────────────
+loo_mae = np.mean(errors)
+
+# ─── FINAL MODEL FIT & PREDICT ────────────────────────────────────────────────
+model = XGBRegressor(**xgb_params)
 model.fit(X, y)
 df["PredictedRaceTime"] = model.predict(X).round(3)
 df = df.sort_values("PredictedRaceTime").reset_index(drop=True)
 df.index += 1
 
 # ─── OUTPUT ───────────────────────────────────────────────────────────────────
-print("\n" + "=" * 100)
+print("\n" + "=" * 105)
 print("🏁  2026 MIAMI GRAND PRIX RACE PREDICTION  🏁")
 print("    Round 4 | May 3, 2026 | 57 Laps | 5.412 km | Miami International Autodrome")
-print(f"    ⛈️  Race Day Weather: ~{int(weather_data['RainProbability']*100)}% rain probability | {weather_data['Temperature']}°C")
-print("    ⚠️  FIA ERS rule changes in effect | Teams with 5-week upgrade packages")
-print("=" * 100)
-print(f"{'Pos':<6} {'Driver':<20} {'Grid':<6} {'Tyre Deg':<10} {'Miami Conf':<12} {'Race Pace':<12} {'Pred Time'}")
-print("-" * 100)
+print(f"    ⛈️  Race Day: ~{int(weather_data['RainProbability']*100)}% rain probability | {weather_data['Temperature']}°C")
+print("    ⚡  Model: XGBoost (XGBRegressor) | n_estimators=200 | lr=0.08 | λ=1.0 | subsample=0.8")
+print("=" * 105)
+print(f"{'Pos':<6} {'Driver':<22} {'Team':<16} {'Grid':<6} {'Tyre Deg':<10} {'Conf':<8} {'Pace':<10} {'Pred Time'}")
+print("-" * 105)
 
 for idx, row in df.iterrows():
     medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(idx, f"P{idx}  ")
     print(
         f"{medal:<6} "
-        f"{row['Driver']:<20} "
+        f"{row['Driver']:<22} "
+        f"{row['Team']:<16} "
         f"P{int(row['MiamiGrid']):<5} "
-        f"{row['TyreDeg']:>8.1f}  "
-        f"{row['Miami_Confidence']:>9}/10  "
-        f"{row['RacePace_CleanAir']:>10.1f}s  "
+        f"{row['TyreDeg']:>7.1f}   "
+        f"{row['Miami_Confidence']:>5}/10  "
+        f"{row['RacePace_CleanAir']:>8.1f}s  "
         f"{row['PredictedRaceTime']:>9.3f}s"
     )
 
-print("=" * 100)
-print(f"📊 Leave-One-Out MAE: {np.mean(errors):.4f} seconds")
-print("=" * 100)
+print("=" * 105)
+print(f"📊 Leave-One-Out MAE: {loo_mae:.4f} seconds")
+print("=" * 105)
 
+# ─── FEATURE IMPORTANCE (XGBoost gain) ───────────────────────────────────────
+print("\n📈 FEATURE IMPORTANCE (XGBoost — gain):")
+print("-" * 60)
+scores = model.get_booster().get_score(importance_type="gain")
 importance_df = pd.DataFrame({
-    "Feature":    features,
-    "Importance": model.feature_importances_
-}).sort_values("Importance", ascending=False).reset_index(drop=True)
+    "Feature": list(scores.keys()),
+    "Gain":    list(scores.values()),
+}).sort_values("Gain", ascending=False).reset_index(drop=True)
+importance_df["Norm"] = importance_df["Gain"] / importance_df["Gain"].sum()
 
-print("\n📈 FEATURE IMPORTANCE:")
-print("-" * 55)
 for _, row in importance_df.iterrows():
-    bar = "█" * int(row["Importance"] * 50)
-    print(f"  {row['Feature']:<28} {row['Importance']:.4f}  {bar}")
+    bar = "█" * int(row["Norm"] * 50)
+    print(f"  {row['Feature']:<28} {row['Norm']:.4f}  {bar}")
 
-print("=" * 100)
+print("=" * 105)
 print("\n📝 MODEL NOTES:")
-print("  • Grid positions are estimated (Sprint Qualifying runs today, May 1)")
-print("  • Miami_Confidence replaces Suzuka_Confidence — reflects circuit-specific form")
-print("  • RainProbability elevated to 0.55 (blended AccuWeather 88% / F1 official 40%)")
-print("  • FIA ERS changes may compress the field vs Japan — extra uncertainty baked in")
-print("  • Rain/SC scenario could benefit Norris (2024 winner), Leclerc (aggressive strategy)")
-print("=" * 100)
+print("  • XGBoost uses gain-based feature importance (avg. loss reduction per split)")
+print("  • subsample=0.8 & colsample_bytree=0.8 add stochastic regularisation")
+print("  • reg_lambda=1.0 (L2) mirrors the HistGBR version; tune reg_alpha for L1")
+print("  • Grid positions estimated — Sprint Qualifying ran today (May 3)")
+print("  • RainProbability = 0.55 (blended AccuWeather 88% / F1 official 40%)")
+print("  • Rain/SC scenario: favours Norris (2024 winner), Leclerc (aggressive strategy)")
+print("  • FIA ERS changes may compress the midfield gap vs Japan")
+print("=" * 105)
+
+# ─── OPTIONAL: matplotlib feature importance chart ────────────────────────────
+# Uncomment to save a chart to disk:
+# from xgboost import plot_importance
+# import matplotlib.pyplot as plt
+# plot_importance(model, importance_type="gain", max_num_features=10)
+# plt.tight_layout()
+# plt.savefig("feature_importance.png", dpi=150)
+# plt.show()
